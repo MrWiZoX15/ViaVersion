@@ -1,12 +1,13 @@
 package us.myles.ViaVersion.protocols.protocol1_16_2to1_16_1;
 
-import us.myles.ViaVersion.api.Via;
 import us.myles.ViaVersion.api.data.UserConnection;
 import us.myles.ViaVersion.api.protocol.Protocol;
 import us.myles.ViaVersion.api.remapper.PacketRemapper;
+import us.myles.ViaVersion.api.rewriters.MetadataRewriter;
+import us.myles.ViaVersion.api.rewriters.RegistryType;
 import us.myles.ViaVersion.api.rewriters.SoundRewriter;
+import us.myles.ViaVersion.api.rewriters.StatisticsRewriter;
 import us.myles.ViaVersion.api.rewriters.TagRewriter;
-import us.myles.ViaVersion.api.rewriters.TagType;
 import us.myles.ViaVersion.api.type.Type;
 import us.myles.ViaVersion.protocols.protocol1_16_2to1_16_1.data.MappingData;
 import us.myles.ViaVersion.protocols.protocol1_16_2to1_16_1.metadata.MetadataRewriter1_16_2To1_16_1;
@@ -19,24 +20,27 @@ import us.myles.ViaVersion.protocols.protocol1_16to1_15_2.ServerboundPackets1_16
 
 public class Protocol1_16_2To1_16_1 extends Protocol<ClientboundPackets1_16, ClientboundPackets1_16_2, ServerboundPackets1_16, ServerboundPackets1_16_2> {
 
+    public static final MappingData MAPPINGS = new MappingData();
     private TagRewriter tagRewriter;
 
     public Protocol1_16_2To1_16_1() {
-        super(ClientboundPackets1_16.class, ClientboundPackets1_16_2.class, ServerboundPackets1_16.class, ServerboundPackets1_16_2.class, true);
+        super(ClientboundPackets1_16.class, ClientboundPackets1_16_2.class, ServerboundPackets1_16.class, ServerboundPackets1_16_2.class);
     }
 
     @Override
     protected void registerPackets() {
-        MetadataRewriter1_16_2To1_16_1 metadataRewriter = new MetadataRewriter1_16_2To1_16_1(this);
+        MetadataRewriter metadataRewriter = new MetadataRewriter1_16_2To1_16_1(this);
 
         EntityPackets.register(this);
         WorldPackets.register(this);
         InventoryPackets.register(this);
 
-        tagRewriter = new TagRewriter(this, Protocol1_16_2To1_16_1::getNewBlockId, InventoryPackets::getNewItemId, metadataRewriter::getNewEntityId);
+        tagRewriter = new TagRewriter(this, metadataRewriter::getNewEntityId);
         tagRewriter.register(ClientboundPackets1_16.TAGS);
 
-        SoundRewriter soundRewriter = new SoundRewriter(this, id -> MappingData.soundMappings.getNewId(id));
+        new StatisticsRewriter(this, metadataRewriter::getNewEntityId).register(ClientboundPackets1_16.STATISTICS);
+
+        SoundRewriter soundRewriter = new SoundRewriter(this);
         soundRewriter.registerSound(ClientboundPackets1_16.SOUND);
         soundRewriter.registerSound(ClientboundPackets1_16.ENTITY_SOUND);
 
@@ -73,17 +77,15 @@ public class Protocol1_16_2To1_16_1 extends Protocol<ClientboundPackets1_16, Cli
     }
 
     @Override
-    protected void loadMappingData() {
-        MappingData.init();
-
-        tagRewriter.addTag(TagType.ITEM, "minecraft:stone_crafting_materials", 14, 962);
-        tagRewriter.addEmptyTag(TagType.BLOCK, "minecraft:mushroom_grow_block");
+    protected void onMappingDataLoaded() {
+        tagRewriter.addTag(RegistryType.ITEM, "minecraft:stone_crafting_materials", 14, 962);
+        tagRewriter.addEmptyTag(RegistryType.BLOCK, "minecraft:mushroom_grow_block");
 
         // The client now wants ALL (previous) tags to be sent, sooooo :>
-        tagRewriter.addEmptyTags(TagType.ITEM, "minecraft:soul_fire_base_blocks", "minecraft:furnace_materials", "minecraft:crimson_stems",
+        tagRewriter.addEmptyTags(RegistryType.ITEM, "minecraft:soul_fire_base_blocks", "minecraft:furnace_materials", "minecraft:crimson_stems",
                 "minecraft:gold_ores", "minecraft:piglin_loved", "minecraft:piglin_repellents", "minecraft:creeper_drop_music_discs",
                 "minecraft:logs_that_burn", "minecraft:stone_tool_materials", "minecraft:warped_stems");
-        tagRewriter.addEmptyTags(TagType.BLOCK, "minecraft:infiniburn_nether", "minecraft:crimson_stems",
+        tagRewriter.addEmptyTags(RegistryType.BLOCK, "minecraft:infiniburn_nether", "minecraft:crimson_stems",
                 "minecraft:wither_summon_base_blocks", "minecraft:infiniburn_overworld", "minecraft:piglin_repellents",
                 "minecraft:hoglin_repellents", "minecraft:prevent_mob_spawning_inside", "minecraft:wart_blocks",
                 "minecraft:stone_pressure_plates", "minecraft:nylium", "minecraft:gold_ores", "minecraft:pressure_plates",
@@ -91,26 +93,13 @@ public class Protocol1_16_2To1_16_1 extends Protocol<ClientboundPackets1_16, Cli
                 "minecraft:base_stone_nether", "minecraft:base_stone_overworld");
     }
 
-    public static int getNewBlockStateId(int id) {
-        int newId = MappingData.blockStateMappings.getNewId(id);
-        if (newId == -1) {
-            Via.getPlatform().getLogger().warning("Missing 1.16.2 blockstate for 1.16 blockstate " + id);
-            return 0;
-        }
-        return newId;
-    }
-
-    public static int getNewBlockId(int id) {
-        int newId = MappingData.blockMappings.getNewId(id);
-        if (newId == -1) {
-            Via.getPlatform().getLogger().warning("Missing 1.16.2 block for 1.16 block " + id);
-            return 0;
-        }
-        return newId;
-    }
-
     @Override
     public void init(UserConnection userConnection) {
         userConnection.put(new EntityTracker1_16_2(userConnection));
+    }
+
+    @Override
+    public MappingData getMappingData() {
+        return MAPPINGS;
     }
 }

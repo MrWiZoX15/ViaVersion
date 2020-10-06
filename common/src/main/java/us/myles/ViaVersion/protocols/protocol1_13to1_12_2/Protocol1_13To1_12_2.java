@@ -1,6 +1,7 @@
 package us.myles.ViaVersion.protocols.protocol1_13to1_12_2;
 
 import com.google.common.collect.Sets;
+import com.google.common.primitives.Ints;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import net.md_5.bungee.api.ChatColor;
@@ -16,6 +17,7 @@ import us.myles.ViaVersion.api.remapper.PacketHandler;
 import us.myles.ViaVersion.api.remapper.PacketRemapper;
 import us.myles.ViaVersion.api.remapper.ValueCreator;
 import us.myles.ViaVersion.api.remapper.ValueTransformer;
+import us.myles.ViaVersion.api.rewriters.MetadataRewriter;
 import us.myles.ViaVersion.api.rewriters.SoundRewriter;
 import us.myles.ViaVersion.api.type.Type;
 import us.myles.ViaVersion.packets.State;
@@ -27,6 +29,7 @@ import us.myles.ViaVersion.protocols.protocol1_13to1_12_2.blockconnections.provi
 import us.myles.ViaVersion.protocols.protocol1_13to1_12_2.data.BlockIdData;
 import us.myles.ViaVersion.protocols.protocol1_13to1_12_2.data.MappingData;
 import us.myles.ViaVersion.protocols.protocol1_13to1_12_2.data.RecipeData;
+import us.myles.ViaVersion.protocols.protocol1_13to1_12_2.data.StatisticData;
 import us.myles.ViaVersion.protocols.protocol1_13to1_12_2.data.StatisticMappings;
 import us.myles.ViaVersion.protocols.protocol1_13to1_12_2.metadata.MetadataRewriter1_13To1_12_2;
 import us.myles.ViaVersion.protocols.protocol1_13to1_12_2.packets.EntityPackets;
@@ -41,14 +44,18 @@ import us.myles.ViaVersion.protocols.protocol1_13to1_12_2.storage.TabCompleteTra
 import us.myles.ViaVersion.protocols.protocol1_9_3to1_9_1_2.storage.ClientWorld;
 import us.myles.ViaVersion.util.GsonUtil;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
 public class Protocol1_13To1_12_2 extends Protocol<ClientboundPackets1_12_1, ClientboundPackets1_13, ServerboundPackets1_12_1, ServerboundPackets1_13> {
 
+    public static final MappingData MAPPINGS = new MappingData();
+
     public Protocol1_13To1_12_2() {
-        super(ClientboundPackets1_12_1.class, ClientboundPackets1_13.class, ServerboundPackets1_12_1.class, ServerboundPackets1_13.class, true);
+        super(ClientboundPackets1_12_1.class, ClientboundPackets1_13.class, ServerboundPackets1_12_1.class, ServerboundPackets1_13.class);
     }
 
     public static final PacketHandler POS_TO_3_INT = wrapper -> {
@@ -58,58 +65,55 @@ public class Protocol1_13To1_12_2 extends Protocol<ClientboundPackets1_12_1, Cli
         wrapper.write(Type.INT, position.getZ());
     };
 
-    public static final PacketHandler SEND_DECLARE_COMMANDS_AND_TAGS =
-            new PacketHandler() { // *insert here a good name*
-                @Override
-                public void handle(PacketWrapper w) throws Exception {
-                    // Send fake declare commands
-                    w.create(0x11, new ValueCreator() {
-                        @Override
-                        public void write(PacketWrapper wrapper) {
-                            wrapper.write(Type.VAR_INT, 2); // Size
-                            // Write root node
-                            wrapper.write(Type.VAR_INT, 0); // Mark as command
-                            wrapper.write(Type.VAR_INT, 1); // 1 child
-                            wrapper.write(Type.VAR_INT, 1); // Child is at 1
+    private static final PacketHandler SEND_DECLARE_COMMANDS_AND_TAGS =
+            w -> {
+                // Send fake declare commands
+                w.create(0x11, new ValueCreator() {
+                    @Override
+                    public void write(PacketWrapper wrapper) {
+                        wrapper.write(Type.VAR_INT, 2); // Size
+                        // Write root node
+                        wrapper.write(Type.VAR_INT, 0); // Mark as command
+                        wrapper.write(Type.VAR_INT, 1); // 1 child
+                        wrapper.write(Type.VAR_INT, 1); // Child is at 1
 
-                            // Write arg node
-                            wrapper.write(Type.VAR_INT, 0x02 | 0x04 | 0x10); // Mark as command
-                            wrapper.write(Type.VAR_INT, 0); // No children
-                            // Extra data
-                            wrapper.write(Type.STRING, "args"); // Arg name
-                            wrapper.write(Type.STRING, "brigadier:string");
-                            wrapper.write(Type.VAR_INT, 2); // Greedy
-                            wrapper.write(Type.STRING, "minecraft:ask_server"); // Ask server
+                        // Write arg node
+                        wrapper.write(Type.VAR_INT, 0x02 | 0x04 | 0x10); // Mark as command
+                        wrapper.write(Type.VAR_INT, 0); // No children
+                        // Extra data
+                        wrapper.write(Type.STRING, "args"); // Arg name
+                        wrapper.write(Type.STRING, "brigadier:string");
+                        wrapper.write(Type.VAR_INT, 2); // Greedy
+                        wrapper.write(Type.STRING, "minecraft:ask_server"); // Ask server
 
-                            wrapper.write(Type.VAR_INT, 0); // Root node index
+                        wrapper.write(Type.VAR_INT, 0); // Root node index
+                    }
+                }).send(Protocol1_13To1_12_2.class);
+
+                // Send tags packet
+                w.create(0x55, new ValueCreator() {
+                    @Override
+                    public void write(PacketWrapper wrapper) throws Exception {
+                        wrapper.write(Type.VAR_INT, MAPPINGS.getBlockTags().size()); // block tags
+                        for (Map.Entry<String, Integer[]> tag : MAPPINGS.getBlockTags().entrySet()) {
+                            wrapper.write(Type.STRING, tag.getKey());
+                            // Needs copy as other protocols may modify it
+                            wrapper.write(Type.VAR_INT_ARRAY_PRIMITIVE, toPrimitive(tag.getValue()));
                         }
-                    }).send(Protocol1_13To1_12_2.class);
-
-                    // Send tags packet
-                    w.create(0x55, new ValueCreator() {
-                        @Override
-                        public void write(PacketWrapper wrapper) throws Exception {
-                            wrapper.write(Type.VAR_INT, MappingData.blockTags.size()); // block tags
-                            for (Map.Entry<String, Integer[]> tag : MappingData.blockTags.entrySet()) {
-                                wrapper.write(Type.STRING, tag.getKey());
-                                // Needs copy as other protocols may modify it
-                                wrapper.write(Type.VAR_INT_ARRAY_PRIMITIVE, toPrimitive(tag.getValue()));
-                            }
-                            wrapper.write(Type.VAR_INT, MappingData.itemTags.size()); // item tags
-                            for (Map.Entry<String, Integer[]> tag : MappingData.itemTags.entrySet()) {
-                                wrapper.write(Type.STRING, tag.getKey());
-                                // Needs copy as other protocols may modify it
-                                wrapper.write(Type.VAR_INT_ARRAY_PRIMITIVE, toPrimitive(tag.getValue()));
-                            }
-                            wrapper.write(Type.VAR_INT, MappingData.fluidTags.size()); // fluid tags
-                            for (Map.Entry<String, Integer[]> tag : MappingData.fluidTags.entrySet()) {
-                                wrapper.write(Type.STRING, tag.getKey());
-                                // Needs copy as other protocols may modify it
-                                wrapper.write(Type.VAR_INT_ARRAY_PRIMITIVE, toPrimitive(tag.getValue()));
-                            }
+                        wrapper.write(Type.VAR_INT, MAPPINGS.getItemTags().size()); // item tags
+                        for (Map.Entry<String, Integer[]> tag : MAPPINGS.getItemTags().entrySet()) {
+                            wrapper.write(Type.STRING, tag.getKey());
+                            // Needs copy as other protocols may modify it
+                            wrapper.write(Type.VAR_INT_ARRAY_PRIMITIVE, toPrimitive(tag.getValue()));
                         }
-                    }).send(Protocol1_13To1_12_2.class);
-                }
+                        wrapper.write(Type.VAR_INT, MAPPINGS.getFluidTags().size()); // fluid tags
+                        for (Map.Entry<String, Integer[]> tag : MAPPINGS.getFluidTags().entrySet()) {
+                            wrapper.write(Type.STRING, tag.getKey());
+                            // Needs copy as other protocols may modify it
+                            wrapper.write(Type.VAR_INT_ARRAY_PRIMITIVE, toPrimitive(tag.getValue()));
+                        }
+                    }
+                }).send(Protocol1_13To1_12_2.class);
             };
 
     // These are arbitrary rewrite values, it just needs an invalid color code character.
@@ -144,7 +148,7 @@ public class Protocol1_13To1_12_2 extends Protocol<ClientboundPackets1_12_1, Cli
 
     @Override
     protected void registerPackets() {
-        new MetadataRewriter1_13To1_12_2(this);
+        MetadataRewriter metadataRewriter = new MetadataRewriter1_13To1_12_2(this);
 
         // Register grouped packet changes
         EntityPackets.register(this);
@@ -189,18 +193,22 @@ public class Protocol1_13To1_12_2 extends Protocol<ClientboundPackets1_12_1, Cli
                 handler(new PacketHandler() {
                     @Override
                     public void handle(PacketWrapper wrapper) throws Exception {
-                        int size = wrapper.passthrough(Type.VAR_INT);
+                        int size = wrapper.read(Type.VAR_INT);
+                        List<StatisticData> remappedStats = new ArrayList<>();
                         for (int i = 0; i < size; i++) {
                             String name = wrapper.read(Type.STRING);
                             String[] split = name.split("\\.");
                             int categoryId = 0;
-                            int newId = 0;
+                            int newId = -1;
+                            int value = wrapper.read(Type.VAR_INT);
                             if (split.length == 2) {
                                 // Custom types
                                 categoryId = 8;
-                                Integer newIdRaw = StatisticMappings.statistics.get(name);
+                                Integer newIdRaw = StatisticMappings.CUSTOM_STATS.get(name);
                                 if (newIdRaw != null) {
                                     newId = newIdRaw;
+                                } else {
+                                    Via.getPlatform().getLogger().warning("Could not find 1.13 -> 1.12.2 statistic mapping for " + name);
                                 }
                             } else {
                                 String category = split[1];
@@ -232,10 +240,15 @@ public class Protocol1_13To1_12_2 extends Protocol<ClientboundPackets1_12_1, Cli
                                         break;
                                 }
                             }
+                            if (newId != -1)
+                                remappedStats.add(new StatisticData(categoryId, newId, value));
+                        }
 
-                            wrapper.write(Type.VAR_INT, categoryId); // category id
-                            wrapper.write(Type.VAR_INT, newId); // statistics id
-                            wrapper.passthrough(Type.VAR_INT); // value
+                        wrapper.write(Type.VAR_INT, remappedStats.size()); // size
+                        for (StatisticData stat : remappedStats) {
+                            wrapper.write(Type.VAR_INT, stat.getCategoryId()); // category id
+                            wrapper.write(Type.VAR_INT, stat.getNewId()); // statistics id
+                            wrapper.write(Type.VAR_INT, stat.getValue()); // value
                         }
                     }
                 });
@@ -325,7 +338,7 @@ public class Protocol1_13To1_12_2 extends Protocol<ClientboundPackets1_12_1, Cli
                         wrapper.cancel();
                         if (item == 383) { // Spawn egg
                             for (int i = 0; i < 44; i++) {
-                                Integer newItem = MappingData.oldToNewItems.get(item << 16 | i);
+                                Integer newItem = getMappingData().getItemMappings().get(item << 16 | i);
                                 if (newItem != null) {
                                     PacketWrapper packet = wrapper.create(0x18);
                                     packet.write(Type.VAR_INT, newItem);
@@ -337,7 +350,7 @@ public class Protocol1_13To1_12_2 extends Protocol<ClientboundPackets1_12_1, Cli
                             }
                         } else {
                             for (int i = 0; i < 16; i++) {
-                                int newItem = MappingData.oldToNewItems.get(item << 4 | i);
+                                int newItem = getMappingData().getItemMappings().get(item << 4 | i);
                                 if (newItem != -1) {
                                     PacketWrapper packet = wrapper.create(0x18);
                                     packet.write(Type.VAR_INT, newItem);
@@ -372,7 +385,7 @@ public class Protocol1_13To1_12_2 extends Protocol<ClientboundPackets1_12_1, Cli
                         int id = wrapper.get(Type.INT, 0);
                         int data = wrapper.get(Type.INT, 1);
                         if (id == 1010) { // Play record
-                            wrapper.set(Type.INT, 1, MappingData.oldToNewItems.get(data << 4));
+                            wrapper.set(Type.INT, 1, getMappingData().getItemMappings().get(data << 4));
                         } else if (id == 2001) { // Block break + block break sound
                             int blockId = data & 0xFFF;
                             int blockData = data >> 12;
@@ -674,7 +687,7 @@ public class Protocol1_13To1_12_2 extends Protocol<ClientboundPackets1_12_1, Cli
         });
         // New 0x4C - Stop Sound
 
-        new SoundRewriter(this, id -> MappingData.soundMappings.getNewId(id)).registerSound(ClientboundPackets1_12_1.SOUND);
+        new SoundRewriter(this).registerSound(ClientboundPackets1_12_1.SOUND);
 
         registerOutgoing(ClientboundPackets1_12_1.TAB_LIST, new PacketRemapper() {
             @Override
@@ -821,7 +834,17 @@ public class Protocol1_13To1_12_2 extends Protocol<ClientboundPackets1_12_1, Cli
             @Override
             public void registerMap() {
                 map(Type.BYTE); // Window id
-                handler(wrapper -> wrapper.write(Type.VAR_INT, Integer.parseInt(wrapper.read(Type.STRING).substring(18))));
+
+                handler(wrapper -> {
+                    String s = wrapper.read(Type.STRING);
+                    Integer id;
+                    if (s.length() < 19 || (id = Ints.tryParse(s.substring(18))) == null) {
+                        wrapper.cancel();
+                        return;
+                    }
+
+                    wrapper.write(Type.VAR_INT, id);
+                });
             }
         });
 
@@ -836,7 +859,15 @@ public class Protocol1_13To1_12_2 extends Protocol<ClientboundPackets1_12_1, Cli
                         int type = wrapper.get(Type.VAR_INT, 0);
 
                         if (type == 0) {
-                            wrapper.write(Type.INT, Integer.parseInt(wrapper.read(Type.STRING).substring(18)));
+                            String s = wrapper.read(Type.STRING);
+                            Integer id;
+                            // Custom recipes
+                            if (s.length() < 19 || (id = Ints.tryParse(s.substring(18))) == null) {
+                                wrapper.cancel();
+                                return;
+                            }
+
+                            wrapper.write(Type.INT, id);
                         }
                         if (type == 1) {
                             wrapper.passthrough(Type.BOOLEAN); // Crafting Recipe Book Open
@@ -992,8 +1023,7 @@ public class Protocol1_13To1_12_2 extends Protocol<ClientboundPackets1_12_1, Cli
     }
 
     @Override
-    protected void loadMappingData() {
-        MappingData.init();
+    protected void onMappingDataLoaded() {
         ConnectionData.init();
         RecipeData.init();
         BlockIdData.init();
@@ -1062,5 +1092,10 @@ public class Protocol1_13To1_12_2 extends Protocol<ClientboundPackets1_12_1, Cli
             prim[i] = array[i];
         }
         return prim;
+    }
+
+    @Override
+    public MappingData getMappingData() {
+        return MAPPINGS;
     }
 }

@@ -6,44 +6,59 @@ import com.github.steveice10.opennbt.tag.builtin.ListTag;
 import com.github.steveice10.opennbt.tag.builtin.LongTag;
 import com.github.steveice10.opennbt.tag.builtin.StringTag;
 import com.github.steveice10.opennbt.tag.builtin.Tag;
-import us.myles.ViaVersion.api.Via;
 import us.myles.ViaVersion.api.minecraft.item.Item;
-import us.myles.ViaVersion.api.protocol.Protocol;
 import us.myles.ViaVersion.api.remapper.PacketRemapper;
 import us.myles.ViaVersion.api.rewriters.ItemRewriter;
 import us.myles.ViaVersion.api.type.Type;
 import us.myles.ViaVersion.api.type.types.UUIDIntArrayType;
-import us.myles.ViaVersion.protocols.protocol1_15to1_14_4.ClientboundPackets1_15;
 import us.myles.ViaVersion.protocols.protocol1_14to1_13_2.data.RecipeRewriter1_14;
+import us.myles.ViaVersion.protocols.protocol1_15to1_14_4.ClientboundPackets1_15;
+import us.myles.ViaVersion.protocols.protocol1_16to1_15_2.Protocol1_16To1_15_2;
 import us.myles.ViaVersion.protocols.protocol1_16to1_15_2.ServerboundPackets1_16;
-import us.myles.ViaVersion.protocols.protocol1_16to1_15_2.data.MappingData;
+import us.myles.ViaVersion.protocols.protocol1_16to1_15_2.storage.InventoryTracker1_16;
 
 import java.util.UUID;
 
 public class InventoryPackets {
 
-    public static void register(Protocol protocol) {
+    public static void register(Protocol1_16To1_15_2 protocol) {
         ItemRewriter itemRewriter = new ItemRewriter(protocol, InventoryPackets::toClient, InventoryPackets::toServer);
 
         protocol.registerOutgoing(ClientboundPackets1_15.OPEN_WINDOW, new PacketRemapper() {
             @Override
             public void registerMap() {
-                map(Type.VAR_INT);
-                map(Type.VAR_INT);
-                map(Type.COMPONENT);
+                map(Type.VAR_INT); // Window Id
+                map(Type.VAR_INT); // Window Type
+                map(Type.COMPONENT); // Window Title
 
                 handler(wrapper -> {
+                    InventoryTracker1_16 inventoryTracker = wrapper.user().get(InventoryTracker1_16.class);
+                    int windowId = wrapper.get(Type.VAR_INT, 0);
                     int windowType = wrapper.get(Type.VAR_INT, 1);
                     if (windowType >= 20) { // smithing added with id 20
                         wrapper.set(Type.VAR_INT, 1, ++windowType);
                     }
+                    inventoryTracker.setInventory((short) windowId);
                 });
             }
         });
+
+        protocol.registerOutgoing(ClientboundPackets1_15.CLOSE_WINDOW, new PacketRemapper() {
+            @Override
+            public void registerMap() {
+                map(Type.UNSIGNED_BYTE);
+
+                handler(wrapper -> {
+                    InventoryTracker1_16 inventoryTracker = wrapper.user().get(InventoryTracker1_16.class);
+                    inventoryTracker.setInventory((short) -1);
+                });
+            }
+        });
+
         protocol.registerOutgoing(ClientboundPackets1_15.WINDOW_PROPERTY, new PacketRemapper() {
             @Override
             public void registerMap() {
-                map(Type.UNSIGNED_BYTE); // Window id
+                map(Type.UNSIGNED_BYTE); // Window Id
                 map(Type.SHORT); // Property
                 map(Type.SHORT); // Value
 
@@ -59,7 +74,7 @@ public class InventoryPackets {
             }
         });
 
-        itemRewriter.registerSetCooldown(ClientboundPackets1_15.COOLDOWN, InventoryPackets::getNewItemId);
+        itemRewriter.registerSetCooldown(ClientboundPackets1_15.COOLDOWN);
         itemRewriter.registerWindowItems(ClientboundPackets1_15.WINDOW_ITEMS, Type.FLAT_VAR_INT_ITEM_ARRAY);
         itemRewriter.registerTradeList(ClientboundPackets1_15.TRADE_LIST, Type.FLAT_VAR_INT_ITEM);
         itemRewriter.registerSetSlot(ClientboundPackets1_15.SET_SLOT, Type.FLAT_VAR_INT_ITEM);
@@ -83,12 +98,26 @@ public class InventoryPackets {
         itemRewriter.registerClickWindow(ServerboundPackets1_16.CLICK_WINDOW, Type.FLAT_VAR_INT_ITEM);
         itemRewriter.registerCreativeInvAction(ServerboundPackets1_16.CREATIVE_INVENTORY_ACTION, Type.FLAT_VAR_INT_ITEM);
 
+        protocol.registerIncoming(ServerboundPackets1_16.CLOSE_WINDOW, new PacketRemapper() {
+            @Override
+            public void registerMap() {
+                map(Type.UNSIGNED_BYTE);
+
+                handler(wrapper -> {
+                    InventoryTracker1_16 inventoryTracker = wrapper.user().get(InventoryTracker1_16.class);
+                    inventoryTracker.setInventory((short) -1);
+                });
+            }
+        });
+
         protocol.registerIncoming(ServerboundPackets1_16.EDIT_BOOK, new PacketRemapper() {
             @Override
             public void registerMap() {
                 handler(wrapper -> InventoryPackets.toServer(wrapper.passthrough(Type.FLAT_VAR_INT_ITEM)));
             }
         });
+
+        itemRewriter.registerSpawnParticle(ClientboundPackets1_15.SPAWN_PARTICLE, Type.FLAT_VAR_INT_ITEM, Type.DOUBLE);
     }
 
     public static void toClient(Item item) {
@@ -108,13 +137,13 @@ public class InventoryPackets {
         }
 
         oldToNewAttributes(item);
-        item.setIdentifier(getNewItemId(item.getIdentifier()));
+        item.setIdentifier(Protocol1_16To1_15_2.MAPPINGS.getNewItemId(item.getIdentifier()));
     }
 
     public static void toServer(Item item) {
         if (item == null) return;
 
-        item.setIdentifier(getOldItemId(item.getIdentifier()));
+        item.setIdentifier(Protocol1_16To1_15_2.MAPPINGS.getOldItemId(item.getIdentifier()));
 
         if (item.getIdentifier() == 771 && item.getTag() != null) {
             CompoundTag tag = item.getTag();
@@ -171,7 +200,7 @@ public class InventoryPackets {
     }
 
     public static void rewriteAttributeName(CompoundTag compoundTag, String entryName, boolean inverse) {
-        StringTag attributeNameTag = compoundTag.get("AttributeName");
+        StringTag attributeNameTag = compoundTag.get(entryName);
         if (attributeNameTag == null) return;
 
         String attributeName = attributeNameTag.getValue();
@@ -179,23 +208,10 @@ public class InventoryPackets {
             attributeName = "minecraft:" + attributeName;
         }
 
-        String mappedAttribute = (inverse ? MappingData.attributeMappings.inverse() : MappingData.attributeMappings).get(attributeName);
+        String mappedAttribute = (inverse ? Protocol1_16To1_15_2.MAPPINGS.getAttributeMappings().inverse()
+                : Protocol1_16To1_15_2.MAPPINGS.getAttributeMappings()).get(attributeName);
         if (mappedAttribute == null) return;
 
         attributeNameTag.setValue(mappedAttribute);
-    }
-
-    public static int getNewItemId(int id) {
-        int newId = MappingData.oldToNewItems.get(id);
-        if (newId == -1) {
-            Via.getPlatform().getLogger().warning("Missing 1.16 item for 1.15.2 item " + id);
-            return 1;
-        }
-        return newId;
-    }
-
-    public static int getOldItemId(int id) {
-        int oldId = MappingData.oldToNewItems.inverse().get(id);
-        return oldId != -1 ? oldId : 1;
     }
 }

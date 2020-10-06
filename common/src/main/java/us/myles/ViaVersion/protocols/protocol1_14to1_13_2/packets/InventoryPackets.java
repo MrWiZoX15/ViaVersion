@@ -24,7 +24,6 @@ import us.myles.ViaVersion.protocols.protocol1_13to1_12_2.ClientboundPackets1_13
 import us.myles.ViaVersion.protocols.protocol1_13to1_12_2.data.RecipeRewriter1_13_2;
 import us.myles.ViaVersion.protocols.protocol1_14to1_13_2.Protocol1_14To1_13_2;
 import us.myles.ViaVersion.protocols.protocol1_14to1_13_2.ServerboundPackets1_14;
-import us.myles.ViaVersion.protocols.protocol1_14to1_13_2.data.MappingData;
 import us.myles.ViaVersion.protocols.protocol1_14to1_13_2.storage.EntityTracker1_14;
 
 import java.util.Set;
@@ -47,7 +46,7 @@ public class InventoryPackets {
     public static void register(Protocol protocol) {
         ItemRewriter itemRewriter = new ItemRewriter(protocol, InventoryPackets::toClient, InventoryPackets::toServer);
 
-        itemRewriter.registerSetCooldown(ClientboundPackets1_13.COOLDOWN, InventoryPackets::getNewItemId);
+        itemRewriter.registerSetCooldown(ClientboundPackets1_13.COOLDOWN);
         itemRewriter.registerAdvancements(ClientboundPackets1_13.ADVANCEMENTS, Type.FLAT_VAR_INT_ITEM);
 
         protocol.registerOutgoing(ClientboundPackets1_13.OPEN_WINDOW, null, new PacketRemapper() {
@@ -230,11 +229,13 @@ public class InventoryPackets {
         });
 
         itemRewriter.registerCreativeInvAction(ServerboundPackets1_14.CREATIVE_INVENTORY_ACTION, Type.FLAT_VAR_INT_ITEM);
+
+        itemRewriter.registerSpawnParticle(ClientboundPackets1_13.SPAWN_PARTICLE, Type.FLAT_VAR_INT_ITEM, Type.FLOAT);
     }
 
     public static void toClient(Item item) {
         if (item == null) return;
-        item.setIdentifier(getNewItemId(item.getIdentifier()));
+        item.setIdentifier(Protocol1_14To1_13_2.MAPPINGS.getNewItemId(item.getIdentifier()));
 
         CompoundTag tag;
         if ((tag = item.getTag()) != null) {
@@ -256,18 +257,9 @@ public class InventoryPackets {
         }
     }
 
-    public static int getNewItemId(int id) {
-        int newId = MappingData.oldToNewItems.get(id);
-        if (newId == -1) {
-            Via.getPlatform().getLogger().warning("Missing 1.14 item for 1.13.2 item " + id);
-            return 1;
-        }
-        return newId;
-    }
-
     public static void toServer(Item item) {
         if (item == null) return;
-        item.setIdentifier(getOldItemId(item.getIdentifier()));
+        item.setIdentifier(Protocol1_14To1_13_2.MAPPINGS.getOldItemId(item.getIdentifier()));
 
         CompoundTag tag;
         if ((tag = item.getTag()) != null) {
@@ -296,10 +288,5 @@ public class InventoryPackets {
                 }
             }
         }
-    }
-
-    public static int getOldItemId(int id) {
-        int oldId = MappingData.oldToNewItems.inverse().get(id);
-        return oldId != -1 ? oldId : 1;
     }
 }

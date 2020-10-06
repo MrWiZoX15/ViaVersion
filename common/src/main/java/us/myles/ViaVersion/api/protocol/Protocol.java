@@ -4,6 +4,7 @@ import com.google.common.base.Preconditions;
 import org.jetbrains.annotations.Nullable;
 import us.myles.ViaVersion.api.PacketWrapper;
 import us.myles.ViaVersion.api.Via;
+import us.myles.ViaVersion.api.data.MappingData;
 import us.myles.ViaVersion.api.data.UserConnection;
 import us.myles.ViaVersion.api.platform.providers.ViaProviders;
 import us.myles.ViaVersion.api.remapper.PacketRemapper;
@@ -36,14 +37,9 @@ public abstract class Protocol<C1 extends ClientboundPacketType, C2 extends Clie
     protected final Class<C2> newClientboundPacketEnum;
     protected final Class<S1> oldServerboundPacketEnum;
     protected final Class<S2> newServerboundPacketEnum;
-    protected final boolean hasMappingDataToLoad;
 
     protected Protocol() {
-        this(null, null, null, null, false);
-    }
-
-    protected Protocol(boolean hasMappingDataToLoad) {
-        this(null, null, null, null, hasMappingDataToLoad);
+        this(null, null, null, null);
     }
 
     /**
@@ -51,21 +47,10 @@ public abstract class Protocol<C1 extends ClientboundPacketType, C2 extends Clie
      */
     protected Protocol(@Nullable Class<C1> oldClientboundPacketEnum, @Nullable Class<C2> clientboundPacketEnum,
                        @Nullable Class<S1> oldServerboundPacketEnum, @Nullable Class<S2> serverboundPacketEnum) {
-        this(oldClientboundPacketEnum, clientboundPacketEnum, oldServerboundPacketEnum, serverboundPacketEnum, false);
-    }
-
-    /**
-     * Creates a protocol with automated id mapping if the respective enums are not null.
-     *
-     * @param hasMappingDataToLoad whether an async executor should call the {@Link #loadMappingData} method
-     */
-    protected Protocol(@Nullable Class<C1> oldClientboundPacketEnum, @Nullable Class<C2> clientboundPacketEnum,
-                       @Nullable Class<S1> oldServerboundPacketEnum, @Nullable Class<S2> serverboundPacketEnum, boolean hasMappingDataToLoad) {
         this.oldClientboundPacketEnum = oldClientboundPacketEnum;
         this.newClientboundPacketEnum = clientboundPacketEnum;
         this.oldServerboundPacketEnum = oldServerboundPacketEnum;
         this.newServerboundPacketEnum = serverboundPacketEnum;
-        this.hasMappingDataToLoad = hasMappingDataToLoad;
         registerPackets();
 
         // Register the rest of the ids with no handlers if necessary
@@ -157,11 +142,19 @@ public abstract class Protocol<C1 extends ClientboundPacketType, C2 extends Clie
     }
 
     /**
-     * Load mapping data for the protocol.
+     * Loads the mappingdata.
+     */
+    protected final void loadMappingData() {
+        getMappingData().load();
+        onMappingDataLoaded();
+    }
+
+    /**
+     * Called after {@link #loadMappingData()} is called; load extra mapping data for the protocol.
      * <p>
      * To be overridden if needed.
      */
-    protected void loadMappingData() {
+    protected void onMappingDataLoaded() {
     }
 
     /**
@@ -387,10 +380,6 @@ public abstract class Protocol<C1 extends ClientboundPacketType, C2 extends Clie
         return incoming.containsKey(packet);
     }
 
-    public boolean hasMappingDataToLoad() {
-        return hasMappingDataToLoad;
-    }
-
     /**
      * Transform a packet using this protocol
      *
@@ -411,34 +400,38 @@ public abstract class Protocol<C1 extends ClientboundPacketType, C2 extends Clie
         int oldId = packetWrapper.getId();
         int newId = direction == Direction.OUTGOING ? protocolPacket.getNewID() : protocolPacket.getOldID();
         packetWrapper.setId(newId);
-        if (protocolPacket.getRemapper() == null) {
-            return;
+
+        PacketRemapper remapper = protocolPacket.getRemapper();
+        if (remapper != null) {
+            try {
+                remapper.remap(packetWrapper);
+            } catch (InformativeException e) { // Catch InformativeExceptions, pass through CancelExceptions
+                throwRemapError(direction, state, oldId, newId, e);
+                return;
+            }
+
+            if (packetWrapper.isCancelled()) {
+                throw CancelException.generate();
+            }
         }
+    }
 
-        // Remap
-        try {
-            protocolPacket.getRemapper().remap(packetWrapper);
-        } catch (InformativeException e) { // Catch InformativeExceptions, pass through CancelExceptions
-            // Don't print errors during handshake
-            if (state == State.HANDSHAKE) {
-                throw e;
-            }
-
-            Class<? extends PacketType> packetTypeClass = state == State.PLAY ? (direction == Direction.OUTGOING ? oldClientboundPacketEnum : newServerboundPacketEnum) : null;
-            if (packetTypeClass != null) {
-                PacketType[] enumConstants = packetTypeClass.getEnumConstants();
-                PacketType packetType = oldId < enumConstants.length && oldId >= 0 ? enumConstants[oldId] : null;
-                Via.getPlatform().getLogger().warning("ERROR IN " + getClass().getSimpleName() + " IN REMAP OF " + packetType + " (" + toNiceHex(oldId) + ")");
-            } else {
-                Via.getPlatform().getLogger().warning("ERROR IN " + getClass().getSimpleName()
-                        + " IN REMAP OF " + toNiceHex(oldId) + "->" + toNiceHex(newId));
-            }
+    private void throwRemapError(Direction direction, State state, int oldId, int newId, InformativeException e) throws InformativeException {
+        // Don't print errors during handshake
+        if (state == State.HANDSHAKE) {
             throw e;
         }
 
-        if (packetWrapper.isCancelled()) {
-            throw CancelException.generate();
+        Class<? extends PacketType> packetTypeClass = state == State.PLAY ? (direction == Direction.OUTGOING ? oldClientboundPacketEnum : newServerboundPacketEnum) : null;
+        if (packetTypeClass != null) {
+            PacketType[] enumConstants = packetTypeClass.getEnumConstants();
+            PacketType packetType = oldId < enumConstants.length && oldId >= 0 ? enumConstants[oldId] : null;
+            Via.getPlatform().getLogger().warning("ERROR IN " + getClass().getSimpleName() + " IN REMAP OF " + packetType + " (" + toNiceHex(oldId) + ")");
+        } else {
+            Via.getPlatform().getLogger().warning("ERROR IN " + getClass().getSimpleName()
+                    + " IN REMAP OF " + toNiceHex(oldId) + "->" + toNiceHex(newId));
         }
+        throw e;
     }
 
     private String toNiceHex(int id) {
@@ -464,6 +457,23 @@ public abstract class Protocol<C1 extends ClientboundPacketType, C2 extends Clie
 
     public void put(Object object) {
         storedObjects.put(object.getClass(), object);
+    }
+
+    /**
+     * Returns true if this Protocol's {@link #loadMappingData()} method should be called.
+     * <p>
+     * This does *not* necessarily mean that {@link #getMappingData()} is non-null, since this may be
+     * overriden, depending on special cases.
+     *
+     * @return true if this Protocol's {@link #loadMappingData()} method should be called
+     */
+    public boolean hasMappingDataToLoad() {
+        return getMappingData() != null;
+    }
+
+    @Nullable
+    public MappingData getMappingData() {
+        return null; // Let the protocols hold the mappings to still have easy, static singleton access there
     }
 
     @Override
